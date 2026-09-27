@@ -17,11 +17,11 @@ Run the optional server endpoint in a second terminal:
 npm run server
 ```
 
-When `ACCESS_PASSWORD_HASH` and `ACCESS_SESSION_SECRET` are configured, the
-browser must complete the first-load access screen before the dashboard is
-rendered. The password is checked by the server using scrypt and the browser
-receives only a temporary signed session token. This is an additional beta
-access gate, not a replacement for Firebase Authentication.
+On first load, the app presents a welcome screen and requires Google Sign-In.
+Only verified `@nyu.edu`, `@aischennai.org`, and `@proton.me` accounts can
+continue to the dashboard. Firebase Authentication and Firestore rules remain
+the security boundary. An optional server-side access gate is documented in
+`.env.example`, but it is not required for the free Firebase Hosting flow.
 
 To have CodeRabbit review this project, push `life-dashboard/` to a GitHub
 repository and install the CodeRabbit GitHub App on that repository. The

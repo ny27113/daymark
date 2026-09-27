@@ -40,11 +40,10 @@ function makeSchedule(tasks) {
 }
 
 function App() {
-  const [accessState, setAccessState] = useState('checking')
-  const [accessPassword, setAccessPassword] = useState('')
-  const [accessError, setAccessError] = useState('')
-  const [accessBusy, setAccessBusy] = useState(false)
   const [user, setUser] = useState(null)
+  const [authReady, setAuthReady] = useState(!firebaseConfigured)
+  const [authBusy, setAuthBusy] = useState(false)
+  const [verified, setVerified] = useState(false)
   const [tasks, setTasks] = useState([])
   const [remoteSubjects, setRemoteSubjects] = useState([])
   const [newTask, setNewTask] = useState('')
@@ -55,50 +54,8 @@ function App() {
   const [brief, setBrief] = useState('')
   const [briefBusy, setBriefBusy] = useState(false)
 
-  useEffect(() => {
-    const apiBase = import.meta.env.VITE_API_BASE_URL || ''
-    const token = window.sessionStorage.getItem('daymark-access-token')
-    fetch(`${apiBase}/api/access/status`)
-      .then(async (response) => {
-        if (!response.ok) throw new Error('Access service unavailable.')
-        return response.json()
-      })
-      .then(async ({ enabled }) => {
-        if (!enabled) return setAccessState('unlocked')
-        if (!token) return setAccessState('locked')
-        const verify = await fetch(`${apiBase}/api/access/status`, { headers: { 'X-Daymark-Access': token } })
-        const result = await verify.json()
-        setAccessState(verify.ok && result.valid ? 'unlocked' : 'locked')
-      })
-      .catch(() => {
-        setAccessError('The access service is unavailable. Start the protected API before opening Daymark.')
-        setAccessState('unavailable')
-      })
-  }, [])
-
-  const unlock = async (event) => {
-    event.preventDefault()
-    setAccessBusy(true)
-    setAccessError('')
-    try {
-      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ''}/api/access/verify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: accessPassword }),
-      })
-      const result = await response.json()
-      if (!response.ok) throw new Error(result.error || 'Access denied.')
-      window.sessionStorage.setItem('daymark-access-token', result.token)
-      setAccessPassword('')
-      setAccessState('unlocked')
-    } catch (unlockError) {
-      setAccessError(unlockError instanceof Error ? unlockError.message : 'Access denied.')
-    } finally {
-      setAccessBusy(false)
-    }
-  }
-
   useEffect(() => watchAuthState((nextUser) => {
+    setAuthReady(true)
     if (nextUser && (!nextUser.emailVerified || !isAllowedEmail(nextUser.email))) {
       signOutUser()
       setUser(null)
@@ -107,6 +64,8 @@ function App() {
     }
     if (nextUser) {
       registerDeviceSession().catch(() => setError('This device could not be registered. Sign-in is paused until the session service is available.'))
+      setVerified(true)
+      window.setTimeout(() => setVerified(false), 1800)
     }
     setUser(nextUser)
     if (!nextUser) {
@@ -114,6 +73,18 @@ function App() {
       setRemoteSubjects([])
     }
   }), [])
+
+  const handleSignIn = async () => {
+    setAuthBusy(true)
+    setError('')
+    try {
+      await signInWithGoogle()
+    } catch (signInError) {
+      setError(signInError instanceof Error ? signInError.message : 'Sign-in was not completed.')
+    } finally {
+      setAuthBusy(false)
+    }
+  }
 
   useEffect(() => {
     if (!user) return undefined
@@ -177,14 +148,15 @@ function App() {
     } finally { setBriefBusy(false) }
   }
 
-  if (accessState !== 'unlocked') {
-    return <div className="access-shell"><div className="access-card"><div className="brand"><div className="brand-mark">d</div><span>daymark</span></div><p className="eyebrow">Private dashboard</p><h1>Enter your access password.</h1><p className="hero-copy">This first gate protects the dashboard before Google Sign-In is shown.</p>{accessState === 'locked' && <form className="access-form" onSubmit={unlock}><label htmlFor="access-password">Access password</label><input id="access-password" type="password" autoComplete="current-password" value={accessPassword} onChange={(event) => setAccessPassword(event.target.value)} autoFocus /><button className="soft-button dark" disabled={accessBusy}>{accessBusy ? 'Checking' : 'Open dashboard'}</button></form>}<p className="form-error" role="alert">{accessError || 'Checking access service.'}</p></div></div>
+  if (!authReady || (!user && firebaseConfigured)) {
+    return <div className="welcome-shell"><div className="welcome-card"><div className="brand"><div className="brand-mark">d</div><span>daymark</span></div><p className="eyebrow">Private dashboard</p><h1>Welcome, Tanav, to your website.</h1><p className="hero-copy">Sign in with Google to verify that it’s you and open your private planning space.</p>{error && <div className="form-error" role="alert">{error}<button aria-label="Dismiss error" onClick={() => setError('')}><X size={14} /></button></div>}<button className="welcome-sign-in" onClick={handleSignIn} disabled={authBusy}>{authBusy ? 'Verifying account' : 'Sign in with Google'}<LogIn size={17} /></button><p className="welcome-note">Only verified accounts ending in @nyu.edu, @aischennai.org, or @proton.me are accepted.</p></div></div>
   }
 
   return <div className="app-shell">
     <header className="topbar"><div className="brand"><div className="brand-mark">d</div><span>daymark</span></div><div className="top-actions"><span className="status-label">{firebaseConfigured ? (user ? `Signed in: ${user.email}` : 'Sign-in required') : 'Local preview only'}</span><button className="icon-button" aria-label="Open menu" onClick={() => setMenuOpen(!menuOpen)}><Menu size={18} /></button>{menuOpen && <div className="menu-popover">{firebaseConfigured ? <button onClick={async () => { if (user) await signOutUser(); else await signInWithGoogle(); setMenuOpen(false) }}>{user ? 'Sign out' : 'Sign in with Google'}</button> : <span>Configure Firebase to enable sync.</span>}</div>}</div></header>
     <main className="page">
       <section className="hero"><div><p className="eyebrow">{todayLabel} <span>/</span> Junior year</p><h1>Today, clearly.</h1><p className="hero-copy">A private workspace for the work you choose to keep in view.</p></div><div className="hero-controls"><button className="soft-button" onClick={exportDay}><Copy size={16} /> Copy day</button>{firebaseConfigured && <button className="soft-button dark" onClick={async () => { try { await signInWithGoogle(); setNotice('Signed in.')} catch (signInError) { setError(signInError instanceof Error ? signInError.message : 'Sign-in was not completed.') } }}><LogIn size={16} /> {user ? 'Account' : 'Sign in'}</button>}</div></section>
+      {verified && <div className="verified-banner" role="status"><Check size={16} /> Identity verified. Welcome back, Tanav.</div>}
       {error && <div className="form-error" role="alert">{error}<button aria-label="Dismiss error" onClick={() => setError('')}><X size={14} /></button></div>}
       <div className="notice" role="status"><CalendarDays size={15} /><span>{user ? 'Your data is connected to this account.' : 'Sign in to save tasks and subjects across devices.'}<button onClick={() => setNotice('Morning bulletin integration is not configured.')}>Bulletin settings</button></span><RefreshCw size={14} /></div>
       <section className="brief-strip"><div><p className="eyebrow">Daily brief</p><p>{brief || 'Generate a short summary from the tasks you have added.'}</p></div><button className="soft-button" onClick={generateBrief} disabled={briefBusy}>{briefBusy ? 'Generating' : 'Generate brief'}</button></section>
