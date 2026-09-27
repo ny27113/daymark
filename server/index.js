@@ -2,8 +2,8 @@ import http from 'node:http'
 import crypto from 'node:crypto'
 
 const port = Number(process.env.PORT || 8787)
-const aiApiUrl = process.env.AI_API_URL
-const aiApiKey = process.env.AI_API_KEY
+const geminiApiKey = process.env.GEMINI_API_KEY
+const geminiModel = process.env.GEMINI_MODEL || 'gemini-2.5-flash'
 const allowedOrigin = process.env.ALLOWED_ORIGIN
 const firebaseProjectId = process.env.FIREBASE_PROJECT_ID
 const localDevAuth = process.env.LOCAL_DEV_AUTH === 'true'
@@ -11,7 +11,7 @@ const accessPasswordHash = process.env.ACCESS_PASSWORD_HASH || ''
 const accessSessionSecret = process.env.ACCESS_SESSION_SECRET || ''
 const allowedEmailDomains = ['nyu.edu', 'aischennai.org', 'proton.me']
 const ownerUid = 'CT4Um9yffCe8IcsWSohL4GRSdKf1'
-const wordpressBulletinUrl = process.env.WORDPRESS_BULLETIN_URL
+const wordpressBulletinApiUrl = process.env.WORDPRESS_BULLETIN_API_URL
 const rateLimit = new Map()
 let adminAuth
 let adminDb
@@ -123,6 +123,39 @@ function fallbackBrief(tasks = [], schedule = []) {
   }
 }
 
+function cleanText(value, limit = 5000) {
+  return String(value || '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, limit)
+}
+
+function geminiUrl() {
+  return `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(geminiModel)}:generateContent?key=${encodeURIComponent(geminiApiKey)}`
+}
+
+async function generateGeminiText(prompt) {
+  if (!geminiApiKey) return null
+  const upstream = await fetch(geminiUrl(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.3, maxOutputTokens: 500 },
+    }),
+  })
+  if (!upstream.ok) throw new Error(`Gemini returned ${upstream.status}.`)
+  const data = await upstream.json()
+  const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('') || ''
+  if (!text.trim()) throw new Error('Gemini returned no text.')
+  return text.trim()
+}
+
 async function readBody(request) {
   let body = ''
   for await (const chunk of request) {
@@ -133,22 +166,8 @@ async function readBody(request) {
 }
 
 async function createBrief(payload) {
-  if (!aiApiUrl || !aiApiKey) return fallbackBrief(payload.tasks, payload.schedule)
-  const upstream = await fetch(aiApiUrl, {
-    method: 'POST',
-    headers: { Authorization: 'Bearer ' + aiApiKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      messages: [
-        { role: 'system', content: 'Write a concise, supportive daily student brief in two sentences. Do not invent deadlines or facts. Return plain text only.' },
-        { role: 'user', content: JSON.stringify({ tasks: payload.tasks, schedule: payload.schedule }) },
-      ],
-    }),
-  })
-  if (!upstream.ok) throw new Error(`AI provider returned ${upstream.status}.`)
-  const data = await upstream.json()
-  const text = data.choices?.[0]?.message?.content || data.output_text
-  if (typeof text !== 'string' || !text.trim()) throw new Error('AI provider returned no brief.')
-  return { text: text.trim(), source: 'server-ai' }
+  const text = await generateGeminiText(`Write a concise, supportive daily student brief in two sentences. Do not invent deadlines or facts. Return plain text only.\n${JSON.stringify({ tasks: payload.tasks, schedule: payload.schedule })}`)
+  return text ? { text, source: 'gemini' } : fallbackBrief(payload.tasks, payload.schedule)
 }
 
 const server = http.createServer(async (request, response) => {
@@ -185,19 +204,46 @@ const server = http.createServer(async (request, response) => {
   }
   if (request.method === 'GET' && request.url === '/api/health') return json(response, 200, { ok: true }, requestOrigin)
   if (request.method === 'GET' && request.url === '/api/bulletin') {
-    if (!wordpressBulletinUrl) return json(response, 503, { error: 'Morning bulletin is not configured.' }, requestOrigin)
+    if (!wordpressBulletinApiUrl) return json(response, 503, { error: 'Morning bulletin is not configured.' }, requestOrigin)
     try {
       if (!hasValidAccessToken(request)) return json(response, 401, { error: 'The access screen must be completed first.' }, requestOrigin)
       const user = await authenticate(request)
       if (!user) return json(response, 401, { error: 'Sign in is required.' }, requestOrigin)
       if (!(await hasActiveSession(request, user))) return json(response, 401, { error: 'An active device session is required.' }, requestOrigin)
-      const upstream = await fetch(wordpressBulletinUrl, { headers: { Accept: 'application/json' } })
+      const bulletinUrl = new URL(wordpressBulletinApiUrl)
+      bulletinUrl.searchParams.set('per_page', '1')
+      bulletinUrl.searchParams.set('orderby', 'date')
+      bulletinUrl.searchParams.set('order', 'desc')
+      bulletinUrl.searchParams.set('_fields', 'date,link,title,content')
+      const upstream = await fetch(bulletinUrl, { headers: { Accept: 'application/json' } })
       if (!upstream.ok) return json(response, 502, { error: 'Morning bulletin could not be fetched.' }, requestOrigin)
       const data = await upstream.json()
-      const text = Array.isArray(data) ? data.slice(0, 3).map((item) => item.title?.rendered || item.title || '').filter(Boolean).join(' / ') : ''
-      return json(response, 200, { text: text || 'No bulletin items were returned.' }, requestOrigin)
+      const item = Array.isArray(data) ? data[0] : null
+      return json(response, 200, {
+        title: cleanText(item?.title?.rendered || item?.title, 180) || 'No bulletin items were returned.',
+        text: cleanText(item?.content?.rendered || item?.content, 1800),
+        date: item?.date || null,
+        link: typeof item?.link === 'string' ? item.link : null,
+      }, requestOrigin)
     } catch {
       return json(response, 502, { error: 'Morning bulletin could not be fetched.' }, requestOrigin)
+    }
+  }
+  if (request.method === 'POST' && request.url === '/api/chat') {
+      if (!withinRateLimit(request)) return json(response, 429, { error: 'Too many requests. Try again shortly.' }, requestOrigin)
+      try {
+        if (!hasValidAccessToken(request)) return json(response, 401, { error: 'The access screen must be completed first.' }, requestOrigin)
+        const user = await authenticate(request)
+        if (!user) return json(response, 401, { error: 'Sign in is required.' }, requestOrigin)
+        if (!(await hasActiveSession(request, user))) return json(response, 401, { error: 'An active device session is required.' }, requestOrigin)
+        const payload = await readBody(request)
+        if (typeof payload.message !== 'string' || !payload.message.trim() || payload.message.length > 2000) {
+          return json(response, 400, { error: 'A message between 1 and 2000 characters is required.' }, requestOrigin)
+        }
+        const text = await generateGeminiText(`You are the private Daymark planning assistant. Answer concisely and practically. Do not invent personal data, deadlines, or school information. User message:\n${payload.message.trim()}`)
+        return json(response, 200, { text: text || 'Gemini is not configured. Add GEMINI_API_KEY on the server.', source: text ? 'gemini' : 'rules' }, requestOrigin)
+      } catch (error) {
+        return json(response, 502, { error: error instanceof Error ? error.message : 'Chat request failed.' }, requestOrigin)
     }
   }
   if (request.method !== 'POST' || request.url !== '/api/brief') return json(response, 404, { error: 'Not found.' }, requestOrigin)

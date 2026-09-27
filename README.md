@@ -30,7 +30,7 @@ included `.coderabbit.yaml` configures security-focused review paths. The
 `coderabbitai/cursor-plugin` reference is a Cursor plugin and must not be
 bundled into the website.
 
-Vite proxies `/api/*` to that server during development. `POST /api/brief` accepts the current tasks and generated schedule and returns a short brief. With no model variables configured it uses the free deterministic fallback. If you deploy the API separately (for example on Cloud Run), set the public API origin in the frontend build as `VITE_API_BASE_URL=https://your-api.example.com`; leave it empty for local Vite proxying. Configure `AI_API_URL` and `AI_API_KEY` in the server environment only; these values are never bundled into the frontend. `.env.local` and all other local env files are ignored by Git.
+Vite proxies `/api/*` to that server during development. `POST /api/brief` accepts the current tasks and generated schedule and uses Gemini when `GEMINI_API_KEY` is configured, otherwise it uses the deterministic fallback. `POST /api/chat` provides the protected private assistant. If you deploy the API separately, set `VITE_API_BASE_URL` in the frontend build; leave it empty for local Vite proxying. Configure `GEMINI_API_KEY` and `GEMINI_MODEL` in the server environment only. These values are never bundled into the frontend. `.env.local` and all other local env files are ignored by Git.
 
 ## Firebase setup
 
@@ -39,7 +39,7 @@ Vite proxies `/api/*` to that server during development. `POST /api/brief` accep
 3. Add the six `VITE_FIREBASE_*` values to `.env.local` (never commit credentials).
 4. Deploy rules from this folder with `firebase deploy --only firestore:rules` after selecting the isolated project.
 5. `src/firebase.js` scopes user data to `users/{uid}`. Deploy the Functions package for trusted session enforcement: `createSession` transactionally keeps at most three non-expired sessions and revokes the oldest when a fourth device signs in; `revokeSession` handles explicit sign-out. Client heartbeats are not a security boundary, and `/sessions` is server-write-only.
-6. For the protected brief and bulletin endpoints, run the server with `FIREBASE_PROJECT_ID` set. In Cloud Run, use the service account's default credentials; locally, authenticate Application Default Credentials with `gcloud auth application-default login`. The server verifies Firebase ID tokens, requires an active device session when Admin Firestore is available, checks the configured `ALLOWED_ORIGIN`, and rate-limits requests. Set `WORDPRESS_BULLETIN_URL` to a trusted WordPress JSON endpoint; leave it empty when no bulletin source is configured.
+6. For the protected brief, chat, and bulletin endpoints, run the server with `FIREBASE_PROJECT_ID` set. In Cloud Run, use the service account's default credentials; locally, authenticate Application Default Credentials with `gcloud auth application-default login`. The server verifies Firebase ID tokens, requires an active device session when Admin Firestore is available, checks the configured `ALLOWED_ORIGIN`, and rate-limits requests. Set `WORDPRESS_BULLETIN_API_URL` to the site's WordPress REST posts endpoint; the AISC bulletin site uses `https://sites.aischennai.org/hsbulletin/wp-json/wp/v2/posts`. The server requests the newest post and does not expose WordPress credentials to the browser.
 7. The server fails closed when Firebase Admin is unavailable. For local fallback testing only, explicitly set `LOCAL_DEV_AUTH=true`; never set it in a deployed environment.
 
 The email-domain allowlist and verified-email requirement are enforced in the client for immediate feedback, on the server after Firebase token verification, and in Firestore rules. Deploy updated rules with:
@@ -67,7 +67,7 @@ firebase deploy --only hosting
 
 ## Scheduling and AI boundary
 
-The scheduler is deterministic and explainable: priority, deadline proximity, duration, fixed class events, energy-window placeholders, and buffers produce editable blocks. The daily brief goes through the server endpoint, which defaults to a no-key rules-based response. A configured model is optional and server-only; no provider credential is exposed to the browser. The core scheduler and fallback remain free and require no credit card.
+The scheduler is deterministic and explainable: priority, deadline proximity, duration, fixed class events, energy-window placeholders, and buffers produce editable blocks. Gemini calls go through the authenticated server endpoint using the Gemini Developer API. A configured model is optional and server-only; no provider credential is exposed to the browser. Enable Firebase App Check for the web app before relying on AI quota in production, and keep the server rate limits enabled. If a Gemini key was ever pasted into a repository, terminal log, screenshot, or chat, revoke it in Google AI Studio and create a replacement before deployment.
 
 ## Privacy and launch gates
 
