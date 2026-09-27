@@ -10,15 +10,20 @@ const localDevAuth = process.env.LOCAL_DEV_AUTH === 'true'
 const accessPasswordHash = process.env.ACCESS_PASSWORD_HASH || ''
 const accessSessionSecret = process.env.ACCESS_SESSION_SECRET || ''
 const allowedEmailDomains = ['nyu.edu', 'aischennai.org', 'proton.me']
+const ownerUid = 'CT4Um9yffCe8IcsWSohL4GRSdKf1'
+const wordpressBulletinUrl = process.env.WORDPRESS_BULLETIN_URL
 const rateLimit = new Map()
 let adminAuth
+let adminDb
 
 if (firebaseProjectId) {
   try {
     const { getApps, initializeApp } = await import('firebase-admin/app')
     const { getAuth } = await import('firebase-admin/auth')
+    const { getFirestore } = await import('firebase-admin/firestore')
     const app = getApps().length ? getApps()[0] : initializeApp()
     adminAuth = getAuth(app)
+    adminDb = getFirestore(app)
   } catch (error) {
     console.error('Firebase Admin could not initialize:', error.message)
   }
@@ -30,7 +35,7 @@ function json(response, status, body, origin) {
     'Cache-Control': 'no-store',
     ...(origin ? {
       'Access-Control-Allow-Origin': origin,
-      'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Daymark-Access',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Daymark-Access, X-Daymark-Session',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
       'Vary': 'Origin',
     } : {}),
@@ -82,7 +87,7 @@ function hasValidAccessToken(request) {
 }
 
 async function authenticate(request) {
-  if (localDevAuth && !firebaseProjectId && !adminAuth) return { uid: 'local-development' }
+  if (localDevAuth && !firebaseProjectId && !adminAuth) return { uid: ownerUid }
   if (!adminAuth) return null
   const authorization = request.headers.authorization || ''
   const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : ''
@@ -90,13 +95,23 @@ async function authenticate(request) {
   try {
     const user = await adminAuth.verifyIdToken(token)
     const email = (user.email || '').toLowerCase()
-    if (user.email_verified !== true || !allowedEmailDomains.some((domain) => email.endsWith(`@${domain}`))) return null
+    if (user.uid !== ownerUid || user.email_verified !== true || !allowedEmailDomains.some((domain) => email.endsWith(`@${domain}`))) return null
     return user
   } catch {
     return null
   }
+
+
 }
 
+async function hasActiveSession(request, user) {
+    if (!adminDb) return true
+    const sessionId = request.headers['x-daymark-session']
+    if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(sessionId)) return false
+    const snapshot = await adminDb.doc(`users/${user.uid}/sessions/${sessionId}`).get()
+    const data = snapshot.data()
+    return snapshot.exists && data?.uid === user.uid && data.revoked !== true
+  }
 function fallbackBrief(tasks = [], schedule = []) {
   const openTasks = tasks.filter((task) => !task.done)
   const first = schedule[0] || openTasks[0]
@@ -121,7 +136,7 @@ async function createBrief(payload) {
   if (!aiApiUrl || !aiApiKey) return fallbackBrief(payload.tasks, payload.schedule)
   const upstream = await fetch(aiApiUrl, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${aiApiKey}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: 'Bearer ' + aiApiKey, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       messages: [
         { role: 'system', content: 'Write a concise, supportive daily student brief in two sentences. Do not invent deadlines or facts. Return plain text only.' },
@@ -142,7 +157,7 @@ const server = http.createServer(async (request, response) => {
   if (request.method === 'OPTIONS') {
     response.writeHead(204, {
       'Access-Control-Allow-Origin': requestOrigin || allowedOrigin || '',
-      'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Daymark-Access',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Daymark-Access, X-Daymark-Session',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
       'Vary': 'Origin',
     })
@@ -169,6 +184,22 @@ const server = http.createServer(async (request, response) => {
     }
   }
   if (request.method === 'GET' && request.url === '/api/health') return json(response, 200, { ok: true }, requestOrigin)
+  if (request.method === 'GET' && request.url === '/api/bulletin') {
+    if (!wordpressBulletinUrl) return json(response, 503, { error: 'Morning bulletin is not configured.' }, requestOrigin)
+    try {
+      if (!hasValidAccessToken(request)) return json(response, 401, { error: 'The access screen must be completed first.' }, requestOrigin)
+      const user = await authenticate(request)
+      if (!user) return json(response, 401, { error: 'Sign in is required.' }, requestOrigin)
+      if (!(await hasActiveSession(request, user))) return json(response, 401, { error: 'An active device session is required.' }, requestOrigin)
+      const upstream = await fetch(wordpressBulletinUrl, { headers: { Accept: 'application/json' } })
+      if (!upstream.ok) return json(response, 502, { error: 'Morning bulletin could not be fetched.' }, requestOrigin)
+      const data = await upstream.json()
+      const text = Array.isArray(data) ? data.slice(0, 3).map((item) => item.title?.rendered || item.title || '').filter(Boolean).join(' / ') : ''
+      return json(response, 200, { text: text || 'No bulletin items were returned.' }, requestOrigin)
+    } catch {
+      return json(response, 502, { error: 'Morning bulletin could not be fetched.' }, requestOrigin)
+    }
+  }
   if (request.method !== 'POST' || request.url !== '/api/brief') return json(response, 404, { error: 'Not found.' }, requestOrigin)
   if (!withinRateLimit(request)) return json(response, 429, { error: 'Too many requests. Try again shortly.' }, requestOrigin)
   try {
@@ -185,4 +216,4 @@ const server = http.createServer(async (request, response) => {
   }
 })
 
-server.listen(port, () => console.log(`Daymark API listening on http://localhost:${port}`))
+server.listen(port, localDevAuth ? '127.0.0.1' : undefined, () => console.log(`Daymark API listening on http://localhost:${port}`))

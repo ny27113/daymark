@@ -3,7 +3,9 @@ import { CalendarDays, Check, ChevronDown, Circle, Copy, LogIn, Menu, Plus, Refr
 import {
   firebaseConfigured,
   getIdToken,
+  getDeviceSessionId,
   isAllowedEmail,
+  OWNER_UID,
   removeCollectionItem,
   registerDeviceSession,
   signInWithGoogle,
@@ -13,22 +15,6 @@ import {
   watchCollection,
   watchDeviceSession,
 } from './firebase.js'
-
-const subjects = [
-  { id: 'a1-l2l', block: 'A1', name: 'L2L', term: 'Semester 2' },
-  { id: 'a2-studio', block: 'A2', name: 'Studio Art 3/4', teacher: 'Miss Victoria Jones', term: 'Three quarters' },
-  { id: 'a3-math', block: 'A3', name: 'Integrated Math 3', teacher: 'Mr. Gabe or Mr. Sortino', term: 'Full year' },
-  { id: 'a4-physics', block: 'A4', name: 'Physics', teacher: 'Mr. Carter', term: 'Full year' },
-  { id: 'b5-psych', block: 'B5', name: 'AP Psychology', term: 'Full year' },
-  { id: 'b6-business', block: 'B6', name: 'Business Management Essentials', teacher: 'Mr. Kelly', term: 'Semester 1' },
-  { id: 'b6-entrepreneurship', block: 'B6', name: 'Entrepreneurship', teacher: 'Mr. Kelly', term: 'Semester 2' },
-  { id: 'b7-lit', block: 'B7', name: 'AP Literature and Composition', teacher: 'Dr. Mabie', term: 'Full year' },
-  { id: 'b8-l2l', block: 'B8', name: 'L2L', term: 'Semester 1' },
-  { id: 'b8-fitness', block: 'B8', name: 'Personal Fitness', teacher: 'Mr. Duffield', term: 'Semester 2' },
-  { id: 'a9-discovery', block: 'A9', name: 'Discovery', teacher: 'Miss Sandia', term: 'Full year' },
-  { id: 'b9-discovery', block: 'B9', name: 'Discovery', teacher: 'Miss Sandhya', term: 'Full year' },
-  { id: 'mobile-apps', block: 'Unassigned', name: 'Mobile Application Development', term: 'Semester 1' },
-]
 
 function makeSchedule(tasks) {
   const starts = ['3:30 PM', '4:25 PM', '5:10 PM', '6:15 PM']
@@ -56,14 +42,14 @@ function App() {
 
   useEffect(() => watchAuthState((nextUser) => {
     setAuthReady(true)
-    if (nextUser && (!nextUser.emailVerified || !isAllowedEmail(nextUser.email))) {
+    if (nextUser && (!nextUser.emailVerified || !isAllowedEmail(nextUser.email) || nextUser.uid !== OWNER_UID)) {
       signOutUser()
       setUser(null)
       setError('Use a verified @nyu.edu, @aischennai.org, or @proton.me account.')
       return
     }
     if (nextUser) {
-      registerDeviceSession().catch(() => setError('This device could not be registered. Sign-in is paused until the session service is available.'))
+      registerDeviceSession().catch(() => setNotice('Identity verified. Trusted three-device enforcement is not active until its server function is deployed.'))
       setVerified(true)
       window.setTimeout(() => setVerified(false), 1800)
     }
@@ -87,7 +73,7 @@ function App() {
   }
 
   useEffect(() => {
-    if (!user) return undefined
+    if (!user || user.uid !== OWNER_UID) return undefined
     const stopTasks = watchCollection(user.uid, 'tasks', setTasks, () => setError('Tasks could not be loaded.'))
     const stopSubjects = watchCollection(user.uid, 'subjects', setRemoteSubjects, () => setError('Subjects could not be loaded.'))
     const stopSession = watchDeviceSession(user.uid, () => {
@@ -102,7 +88,7 @@ function App() {
   const todayLabel = useMemo(() => new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date()), [])
   const schedule = useMemo(() => makeSchedule(tasks), [tasks])
   const completed = tasks.filter((task) => task.done).length
-  const allSubjects = [...subjects.filter((item) => !remoteSubjects.some((remote) => remote.id === item.id)), ...remoteSubjects]
+  const allSubjects = remoteSubjects
 
   const updateTask = async (task) => {
     const next = { ...task, updatedAt: new Date().toISOString() }
@@ -136,7 +122,7 @@ function App() {
       const token = await getIdToken()
       const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ''}/api/brief`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Daymark-Access': window.sessionStorage.getItem('daymark-access-token') || '', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: { 'Content-Type': 'application/json', 'X-Daymark-Access': window.sessionStorage.getItem('daymark-access-token') || '', 'X-Daymark-Session': getDeviceSessionId(), ...(token ? { Authorization: 'Bearer ' + token } : {}) },
         body: JSON.stringify({ tasks, schedule }),
       })
       const result = await response.json()
@@ -149,16 +135,16 @@ function App() {
   }
 
   if (!authReady || (!user && firebaseConfigured)) {
-    return <div className="welcome-shell"><div className="welcome-card"><div className="brand"><div className="brand-mark">d</div><span>daymark</span></div><p className="eyebrow">Private dashboard</p><h1>Welcome, Tanav, to your website.</h1><p className="hero-copy">Sign in with Google to verify that it’s you and open your private planning space.</p>{error && <div className="form-error" role="alert">{error}<button aria-label="Dismiss error" onClick={() => setError('')}><X size={14} /></button></div>}<button className="welcome-sign-in" onClick={handleSignIn} disabled={authBusy}>{authBusy ? 'Verifying account' : 'Sign in with Google'}<LogIn size={17} /></button><p className="welcome-note">Only verified accounts ending in @nyu.edu, @aischennai.org, or @proton.me are accepted.</p></div></div>
+    return <div className="welcome-shell"><div className="welcome-card"><div className="brand"><div className="brand-mark">d</div><span>daymark</span></div><p className="eyebrow">Private dashboard</p><h1>Welcome to your private dashboard.</h1><p className="hero-copy">Sign in with Google to verify that it’s you and open your private planning space.</p>{error && <div className="form-error" role="alert">{error}<button aria-label="Dismiss error" onClick={() => setError('')}><X size={14} /></button></div>}<button className="welcome-sign-in" onClick={handleSignIn} disabled={authBusy}>{authBusy ? 'Verifying account' : 'Sign in with Google'}<LogIn size={17} /></button><p className="welcome-note">Only the verified owner account can continue.</p></div></div>
   }
 
   return <div className="app-shell">
     <header className="topbar"><div className="brand"><div className="brand-mark">d</div><span>daymark</span></div><div className="top-actions"><span className="status-label">{firebaseConfigured ? (user ? `Signed in: ${user.email}` : 'Sign-in required') : 'Local preview only'}</span><button className="icon-button" aria-label="Open menu" onClick={() => setMenuOpen(!menuOpen)}><Menu size={18} /></button>{menuOpen && <div className="menu-popover">{firebaseConfigured ? <button onClick={async () => { if (user) await signOutUser(); else await signInWithGoogle(); setMenuOpen(false) }}>{user ? 'Sign out' : 'Sign in with Google'}</button> : <span>Configure Firebase to enable sync.</span>}</div>}</div></header>
     <main className="page">
       <section className="hero"><div><p className="eyebrow">{todayLabel} <span>/</span> Junior year</p><h1>Today, clearly.</h1><p className="hero-copy">A private workspace for the work you choose to keep in view.</p></div><div className="hero-controls"><button className="soft-button" onClick={exportDay}><Copy size={16} /> Copy day</button>{firebaseConfigured && <button className="soft-button dark" onClick={async () => { try { await signInWithGoogle(); setNotice('Signed in.')} catch (signInError) { setError(signInError instanceof Error ? signInError.message : 'Sign-in was not completed.') } }}><LogIn size={16} /> {user ? 'Account' : 'Sign in'}</button>}</div></section>
-      {verified && <div className="verified-banner" role="status"><Check size={16} /> Identity verified. Welcome back, Tanav.</div>}
+      {verified && <div className="verified-banner" role="status"><Check size={16} /> Identity verified.</div>}
       {error && <div className="form-error" role="alert">{error}<button aria-label="Dismiss error" onClick={() => setError('')}><X size={14} /></button></div>}
-      <div className="notice" role="status"><CalendarDays size={15} /><span>{user ? 'Your data is connected to this account.' : 'Sign in to save tasks and subjects across devices.'}<button onClick={() => setNotice('Morning bulletin integration is not configured.')}>Bulletin settings</button></span><RefreshCw size={14} /></div>
+      <div className="notice" role="status"><CalendarDays size={15} /><span>{user ? 'Your data is connected to this account.' : 'Sign in to save tasks and subjects across devices.'}<button onClick={() => setNotice('Morning bulletin is not configured. Set WORDPRESS_BULLETIN_URL on the server.')}>Bulletin settings</button></span><RefreshCw size={14} /></div>
       <section className="brief-strip"><div><p className="eyebrow">Daily brief</p><p>{brief || 'Generate a short summary from the tasks you have added.'}</p></div><button className="soft-button" onClick={generateBrief} disabled={briefBusy}>{briefBusy ? 'Generating' : 'Generate brief'}</button></section>
       <div className="dashboard-grid"><div className="main-column"><section className="section-heading"><div><p className="eyebrow">Focus lane</p><h2>Tasks for today</h2></div><span className="muted">{completed} of {tasks.length} complete</span></section><section className="module"><div className="module-head"><div><p className="eyebrow">Rapid capture</p><h3>Your task list</h3></div><button className="round-button" aria-label="Add task" onClick={() => setShowAdd(!showAdd)}>{showAdd ? <X size={17} /> : <Plus size={17} />}</button></div>{showAdd && <form className="add-form" onSubmit={addTask}><input autoFocus value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="Add a task" aria-label="Task title" /><button className="soft-button dark">Add</button></form>}<div className="task-list">{tasks.length ? tasks.map((task) => <div className={`task-row ${task.done ? 'is-done' : ''}`} key={task.id}><button className="check-button" onClick={() => updateTask({ ...task, done: !task.done })} aria-label={task.done ? `Mark ${task.title} incomplete` : `Complete ${task.title}`}>{task.done ? <Check size={15} /> : <Circle size={15} />}</button><div className="task-content"><strong>{task.title}</strong><span>{task.duration || 30} minutes</span></div><button className={`priority priority-${(task.priority || 'Medium').toLowerCase()}`} onClick={() => updateTask({ ...task, priority: task.priority === 'High' ? 'Low' : task.priority === 'Low' ? 'Medium' : 'High' })}>{task.priority || 'Medium'} <ChevronDown size={13} /></button><button className="row-icon" aria-label={`Delete ${task.title}`} onClick={() => deleteTask(task)}><Trash2 size={15} /></button></div>) : <p className="empty-state">No tasks yet. Add the next thing you need to do.</p>}</div></section><section className="module"><div className="module-head"><div><p className="eyebrow">Deterministic plan</p><h3>Available afternoon blocks</h3></div></div><div className="schedule-list">{schedule.length ? schedule.map((item) => <div className="schedule-row" key={item.id}><time>{item.start}</time><div className="schedule-bar"><strong>{item.title}</strong><span>{item.duration || 30} minutes / {item.reason}</span></div></div>) : <p className="empty-state">Add an incomplete task to create a plan.</p>}</div></section></div>
         <aside className="side-column"><section className="module"><div className="module-head"><div><p className="eyebrow">Junior year</p><h3>Subjects and blocks</h3></div></div><p className="module-note">School year starts August 4.</p><div className="subject-list">{allSubjects.map((subject) => <div className="subject-row" key={subject.id}><span className="subject-block">{subject.block}</span><div><strong>{subject.name}</strong><span>{[subject.teacher, subject.term].filter(Boolean).join(' / ')}</span></div></div>)}</div></section><section className="module"><div className="module-head"><div><p className="eyebrow">Deadlines and goals</p><h3>Your horizon</h3></div></div><p className="empty-state">No deadlines added yet. Add only dates that matter to you.</p></section><section className="module"><div className="module-head"><div><p className="eyebrow">Privacy</p><h3>Private by default</h3></div></div><p className="module-note">Your dashboard is intended for your account and is excluded from search indexing. Data access is restricted to your verified account.</p></section></aside></div>

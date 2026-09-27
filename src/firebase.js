@@ -9,6 +9,7 @@ const app = firebaseConfigured ? (getApps()[0] || initializeApp(config)) : null
 export const auth = app ? getAuth(app) : null
 export const db = app ? getFirestore(app) : null
 export const functions = app ? getFunctions(app) : null
+export const OWNER_UID = 'CT4Um9yffCe8IcsWSohL4GRSdKf1'
 export const ALLOWED_EMAIL_DOMAINS = ['nyu.edu', 'aischennai.org', 'proton.me']
 
 export function isAllowedEmail(email) {
@@ -21,9 +22,9 @@ googleProvider.setCustomParameters({ prompt: 'select_account' })
 export async function signInWithGoogle() {
   if (!auth) throw new Error('Firebase is not configured.')
   const result = await signInWithPopup(auth, googleProvider)
-  if (!result.user.emailVerified || !isAllowedEmail(result.user.email)) {
+  if (!result.user.emailVerified || !isAllowedEmail(result.user.email) || result.user.uid !== OWNER_UID) {
     await signOut(auth)
-    throw new Error('Use an @nyu.edu, @aischennai.org, or @proton.me account.')
+    throw new Error('This Google account is not the Daymark owner account.')
   }
   return result
 }
@@ -67,7 +68,7 @@ export async function replaceCollection(uid, name, items) {
 }
 
 const sessionStorageKey = 'daymark-session-id'
-function getDeviceSessionId() {
+export function getDeviceSessionId() {
   let id = window.localStorage.getItem(sessionStorageKey)
   if (!id) {
     id = crypto.randomUUID().replaceAll('-', '')

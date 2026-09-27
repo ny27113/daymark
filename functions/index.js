@@ -10,11 +10,12 @@ const db = getFirestore(app);
 const MAX_SESSIONS = 3;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const ALLOWED_EMAILS = ["nyu.edu", "aischennai.org", "proton.me"];
+const OWNER_UID = "CT4Um9yffCe8IcsWSohL4GRSdKf1";
 
 function assertAllowedUser(request) {
   const user = request.auth?.token;
   const email = String(user?.email || "").toLowerCase();
-  if (!request.auth || user?.email_verified !== true ||
+  if (!request.auth || request.auth.uid !== OWNER_UID || user?.email_verified !== true ||
       !ALLOWED_EMAILS.some((domain) => email.endsWith(`@${domain}`))) {
     throw new HttpsError("permission-denied", "A verified allowlisted account is required.");
   }
@@ -43,7 +44,8 @@ exports.createSession = onCall(async (request) => {
   await db.runTransaction(async (transaction) => {
     const currentRef = sessionRef(uid, sessionId);
     const current = await transaction.get(currentRef);
-    if (current.exists && current.data().revoked !== true) {
+    if (current.exists && current.data().revoked !== true
+        && current.data().lastSeenAt?.toMillis?.() >= cutoff.toMillis()) {
       transaction.update(currentRef, { lastSeenAt: now });
       return;
     }

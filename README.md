@@ -1,4 +1,4 @@
-# Daymark — life dashboard
+# Daymark - life dashboard
 
 A Vite + React dashboard for a high-school junior: a calm daily view, rapid task capture, deterministic scheduling, classes, goals, routines, weekly review, and copy-ready export. It is intentionally a sibling app; `nyu-clubs/` is untouched.
 
@@ -18,10 +18,11 @@ npm run server
 ```
 
 On first load, the app presents a welcome screen and requires Google Sign-In.
-Only verified `@nyu.edu`, `@aischennai.org`, and `@proton.me` accounts can
-continue to the dashboard. Firebase Authentication and Firestore rules remain
-the security boundary. An optional server-side access gate is documented in
-`.env.example`, but it is not required for the free Firebase Hosting flow.
+Only the configured owner Firebase UID can continue to the dashboard. The
+approved email-domain check remains defense in depth. Firebase Authentication
+and Firestore rules remain the security boundary. An optional server-side
+access gate is documented in `.env.example`, but it is not required for the
+free Firebase Hosting flow.
 
 To have CodeRabbit review this project, push `life-dashboard/` to a GitHub
 repository and install the CodeRabbit GitHub App on that repository. The
@@ -34,11 +35,11 @@ Vite proxies `/api/*` to that server during development. `POST /api/brief` accep
 ## Firebase setup
 
 1. Create a separate Firebase project and register a Web app.
-2. Enable Google under Authentication → Sign-in providers and add `localhost` to authorized domains. Only `@nyu.edu`, `@aischennai.org`, and `@proton.me` accounts are permitted.
+2. Enable Google under Authentication -> Sign-in providers and add `localhost` to authorized domains. The configured owner UID is the only account authorized; the approved domains are defense in depth.
 3. Add the six `VITE_FIREBASE_*` values to `.env.local` (never commit credentials).
 4. Deploy rules from this folder with `firebase deploy --only firestore:rules` after selecting the isolated project.
 5. `src/firebase.js` scopes user data to `users/{uid}`. Deploy the Functions package for trusted session enforcement: `createSession` transactionally keeps at most three non-expired sessions and revokes the oldest when a fourth device signs in; `revokeSession` handles explicit sign-out. Client heartbeats are not a security boundary, and `/sessions` is server-write-only.
-6. For the protected brief endpoint, run the server with `FIREBASE_PROJECT_ID` set. In Cloud Run, use the service account's default credentials; locally, authenticate Application Default Credentials with `gcloud auth application-default login`. The server verifies Firebase ID tokens, checks the configured `ALLOWED_ORIGIN`, and rate-limits brief requests.
+6. For the protected brief and bulletin endpoints, run the server with `FIREBASE_PROJECT_ID` set. In Cloud Run, use the service account's default credentials; locally, authenticate Application Default Credentials with `gcloud auth application-default login`. The server verifies Firebase ID tokens, requires an active device session when Admin Firestore is available, checks the configured `ALLOWED_ORIGIN`, and rate-limits requests. Set `WORDPRESS_BULLETIN_URL` to a trusted WordPress JSON endpoint; leave it empty when no bulletin source is configured.
 7. The server fails closed when Firebase Admin is unavailable. For local fallback testing only, explicitly set `LOCAL_DEV_AUTH=true`; never set it in a deployed environment.
 
 The email-domain allowlist and verified-email requirement are enforced in the client for immediate feedback, on the server after Firebase token verification, and in Firestore rules. Deploy updated rules with:
@@ -71,12 +72,12 @@ The scheduler is deterministic and explainable: priority, deadline proximity, du
 ## Privacy and launch gates
 
 - The authenticated application sends `noindex, nofollow, noarchive` metadata and `robots.txt` disallows crawling.
-- `privacy.html` and `terms.html` are public static pages and include canonical metadata for the Firebase Hosting domain. Update these URLs after connecting a custom domain.
-- `public/sitemap.xml` lists only the public legal pages on the Firebase Hosting domain. Update its host after connecting a custom domain.
+- `privacy.html` and `terms.html` are static legal pages marked `noindex,nofollow,noarchive`.
+- `public/sitemap.xml` intentionally contains no URLs because this is a private dashboard.
 - No analytics or non-essential cookies are included, so no cookie-consent banner is needed unless tracking is added later.
 - `public/favicon.svg` is copied into the Hosting build.
 - The dashboard writes tasks and subjects under the authenticated user's Firestore path. Sign-in is required for cross-device persistence.
-- Each authenticated browser registers a server-managed session. The trusted Function revokes the oldest active session when a fourth device signs in, and the client signs out when its session is revoked.
+- Each authenticated browser attempts to register a server-managed session. The trusted Function revokes the oldest active session when a fourth device signs in, and the client signs out when its session is revoked. If Functions are unavailable on the Firebase Spark plan, the UI reports that the cap is not active; Firestore owner rules still protect the data.
 
 ## Production checks
 
