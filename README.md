@@ -88,3 +88,6 @@ grep -R "AI_API_KEY\|sk-" dist || true
 ```
 
 Connect the custom domain in Firebase Hosting, then update `ALLOWED_ORIGIN`, `VITE_API_BASE_URL`, canonical URLs, and the sitemap host to match it. Use a Firebase Hosting preview channel for beta testers before the production deploy.
+
+
+Code Checked with Code rabbit ![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/ny27113/daymark?utm_source=oss&utm_medium=github&utm_campaign=ny27113%2Fdaymark&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
