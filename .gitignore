@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.firebase/
+.agents/
+.claude/
+.DS_Store
+.env
+.env.*
+!.env.example

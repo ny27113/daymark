@@ -1,0 +1,24 @@
+reviews:
+  auto_review:
+    enabled: true
+  profile: chill
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  path_instructions:
+    - path: "src/**"
+      instructions: |
+        Check that Firebase browser configuration contains no server secrets.
+        Treat authentication, Firestore ownership, access-gate state, and token
+        handling as security-sensitive. Flag client-only security claims.
+    - path: "server/**"
+      instructions: |
+        Review authentication, origin checks, rate limits, password verification,
+        token signing, request-size limits, and upstream authorization headers.
+        Do not suggest moving secrets into VITE_ variables.
+    - path: "functions/**"
+      instructions: |
+        Review callable-function authorization, Firestore transactions, session
+        revocation, and three-device-cap race conditions.
+chat:
+  auto_reply: true

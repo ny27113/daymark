@@ -1,0 +1,198 @@
+import { useEffect, useMemo, useState } from 'react'
+import { CalendarDays, Check, ChevronDown, Circle, Copy, LogIn, Menu, Plus, RefreshCw, Trash2, X } from 'lucide-react'
+import {
+  firebaseConfigured,
+  getIdToken,
+  isAllowedEmail,
+  removeCollectionItem,
+  registerDeviceSession,
+  signInWithGoogle,
+  signOutUser,
+  saveCollectionItem,
+  watchAuthState,
+  watchCollection,
+  watchDeviceSession,
+} from './firebase.js'
+
+const subjects = [
+  { id: 'a1-l2l', block: 'A1', name: 'L2L', term: 'Semester 2' },
+  { id: 'a2-studio', block: 'A2', name: 'Studio Art 3/4', teacher: 'Miss Victoria Jones', term: 'Three quarters' },
+  { id: 'a3-math', block: 'A3', name: 'Integrated Math 3', teacher: 'Mr. Gabe or Mr. Sortino', term: 'Full year' },
+  { id: 'a4-physics', block: 'A4', name: 'Physics', teacher: 'Mr. Carter', term: 'Full year' },
+  { id: 'b5-psych', block: 'B5', name: 'AP Psychology', term: 'Full year' },
+  { id: 'b6-business', block: 'B6', name: 'Business Management Essentials', teacher: 'Mr. Kelly', term: 'Semester 1' },
+  { id: 'b6-entrepreneurship', block: 'B6', name: 'Entrepreneurship', teacher: 'Mr. Kelly', term: 'Semester 2' },
+  { id: 'b7-lit', block: 'B7', name: 'AP Literature and Composition', teacher: 'Dr. Mabie', term: 'Full year' },
+  { id: 'b8-l2l', block: 'B8', name: 'L2L', term: 'Semester 1' },
+  { id: 'b8-fitness', block: 'B8', name: 'Personal Fitness', teacher: 'Mr. Duffield', term: 'Semester 2' },
+  { id: 'a9-discovery', block: 'A9', name: 'Discovery', teacher: 'Miss Sandia', term: 'Full year' },
+  { id: 'b9-discovery', block: 'B9', name: 'Discovery', teacher: 'Miss Sandhya', term: 'Full year' },
+  { id: 'mobile-apps', block: 'Unassigned', name: 'Mobile Application Development', term: 'Semester 1' },
+]
+
+function makeSchedule(tasks) {
+  const starts = ['3:30 PM', '4:25 PM', '5:10 PM', '6:15 PM']
+  return [...tasks].filter((task) => !task.done).sort((a, b) => ({ High: 0, Medium: 1, Low: 2 }[a.priority] - { High: 0, Medium: 1, Low: 2 }[b.priority])).map((task, index) => ({
+    ...task,
+    start: starts[index % starts.length],
+    reason: task.priority === 'High' ? 'High priority' : 'Fits the available time',
+  }))
+}
+
+function App() {
+  const [accessState, setAccessState] = useState('checking')
+  const [accessPassword, setAccessPassword] = useState('')
+  const [accessError, setAccessError] = useState('')
+  const [accessBusy, setAccessBusy] = useState(false)
+  const [user, setUser] = useState(null)
+  const [tasks, setTasks] = useState([])
+  const [remoteSubjects, setRemoteSubjects] = useState([])
+  const [newTask, setNewTask] = useState('')
+  const [showAdd, setShowAdd] = useState(false)
+  const [notice, setNotice] = useState('')
+  const [error, setError] = useState('')
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [brief, setBrief] = useState('')
+  const [briefBusy, setBriefBusy] = useState(false)
+
+  useEffect(() => {
+    const apiBase = import.meta.env.VITE_API_BASE_URL || ''
+    const token = window.sessionStorage.getItem('daymark-access-token')
+    fetch(`${apiBase}/api/access/status`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Access service unavailable.')
+        return response.json()
+      })
+      .then(async ({ enabled }) => {
+        if (!enabled) return setAccessState('unlocked')
+        if (!token) return setAccessState('locked')
+        const verify = await fetch(`${apiBase}/api/access/status`, { headers: { 'X-Daymark-Access': token } })
+        const result = await verify.json()
+        setAccessState(verify.ok && result.valid ? 'unlocked' : 'locked')
+      })
+      .catch(() => {
+        setAccessError('The access service is unavailable. Start the protected API before opening Daymark.')
+        setAccessState('unavailable')
+      })
+  }, [])
+
+  const unlock = async (event) => {
+    event.preventDefault()
+    setAccessBusy(true)
+    setAccessError('')
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ''}/api/access/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: accessPassword }),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'Access denied.')
+      window.sessionStorage.setItem('daymark-access-token', result.token)
+      setAccessPassword('')
+      setAccessState('unlocked')
+    } catch (unlockError) {
+      setAccessError(unlockError instanceof Error ? unlockError.message : 'Access denied.')
+    } finally {
+      setAccessBusy(false)
+    }
+  }
+
+  useEffect(() => watchAuthState((nextUser) => {
+    if (nextUser && (!nextUser.emailVerified || !isAllowedEmail(nextUser.email))) {
+      signOutUser()
+      setUser(null)
+      setError('Use a verified @nyu.edu, @aischennai.org, or @proton.me account.')
+      return
+    }
+    if (nextUser) {
+      registerDeviceSession().catch(() => setError('This device could not be registered. Sign-in is paused until the session service is available.'))
+    }
+    setUser(nextUser)
+    if (!nextUser) {
+      setTasks([])
+      setRemoteSubjects([])
+    }
+  }), [])
+
+  useEffect(() => {
+    if (!user) return undefined
+    const stopTasks = watchCollection(user.uid, 'tasks', setTasks, () => setError('Tasks could not be loaded.'))
+    const stopSubjects = watchCollection(user.uid, 'subjects', setRemoteSubjects, () => setError('Subjects could not be loaded.'))
+    const stopSession = watchDeviceSession(user.uid, () => {
+      setError('This device session was revoked because the three-device limit was reached.')
+      signOutUser()
+    })
+    return () => { stopTasks(); stopSubjects(); stopSession() }
+  }, [user])
+
+  useEffect(() => { if (notice) { const timer = setTimeout(() => setNotice(''), 3000); return () => clearTimeout(timer) } }, [notice])
+
+  const todayLabel = useMemo(() => new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date()), [])
+  const schedule = useMemo(() => makeSchedule(tasks), [tasks])
+  const completed = tasks.filter((task) => task.done).length
+  const allSubjects = [...subjects.filter((item) => !remoteSubjects.some((remote) => remote.id === item.id)), ...remoteSubjects]
+
+  const updateTask = async (task) => {
+    const next = { ...task, updatedAt: new Date().toISOString() }
+    try {
+      await saveCollectionItem(user.uid, 'tasks', task.id, next)
+    } catch {
+      setError('Task could not be saved. Check your connection and try again.')
+    }
+  }
+  const addTask = async (event) => {
+    event.preventDefault()
+    const title = newTask.trim()
+    if (!title) { setError('Enter a task before adding it.'); return }
+    const task = { id: crypto.randomUUID(), title, duration: 30, priority: 'Medium', done: false, deadline: '' }
+    if (!user) { setError('Sign in before saving tasks across devices.'); return }
+    await updateTask(task)
+    setNewTask('')
+    setShowAdd(false)
+    setNotice('Task added.')
+  }
+  const deleteTask = async (task) => {
+    try { await removeCollectionItem(user.uid, 'tasks', task.id); setNotice('Task removed.') } catch { setError('Task could not be removed.') }
+  }
+  const exportDay = async () => {
+    const text = `DAYMARK\n${todayLabel}\n\nTASKS\n${tasks.length ? tasks.map((item) => `${item.done ? '[x]' : '[ ]'} ${item.title}`).join('\n') : 'No tasks added.'}\n\nSCHEDULE\n${schedule.length ? schedule.map((item) => `${item.start} ${item.title} (${item.duration} min)`).join('\n') : 'No scheduled tasks.'}`
+    try { await navigator.clipboard.writeText(text); setNotice('Day copied to clipboard.') } catch { setError('Clipboard access is unavailable in this browser.') }
+  }
+  const generateBrief = async () => {
+    setBriefBusy(true)
+    try {
+      const token = await getIdToken()
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ''}/api/brief`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Daymark-Access': window.sessionStorage.getItem('daymark-access-token') || '', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ tasks, schedule }),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'Brief unavailable.')
+      setBrief(result.text)
+      setNotice('Brief ready.')
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Brief endpoint unavailable.')
+    } finally { setBriefBusy(false) }
+  }
+
+  if (accessState !== 'unlocked') {
+    return <div className="access-shell"><div className="access-card"><div className="brand"><div className="brand-mark">d</div><span>daymark</span></div><p className="eyebrow">Private dashboard</p><h1>Enter your access password.</h1><p className="hero-copy">This first gate protects the dashboard before Google Sign-In is shown.</p>{accessState === 'locked' && <form className="access-form" onSubmit={unlock}><label htmlFor="access-password">Access password</label><input id="access-password" type="password" autoComplete="current-password" value={accessPassword} onChange={(event) => setAccessPassword(event.target.value)} autoFocus /><button className="soft-button dark" disabled={accessBusy}>{accessBusy ? 'Checking' : 'Open dashboard'}</button></form>}<p className="form-error" role="alert">{accessError || 'Checking access service.'}</p></div></div>
+  }
+
+  return <div className="app-shell">
+    <header className="topbar"><div className="brand"><div className="brand-mark">d</div><span>daymark</span></div><div className="top-actions"><span className="status-label">{firebaseConfigured ? (user ? `Signed in: ${user.email}` : 'Sign-in required') : 'Local preview only'}</span><button className="icon-button" aria-label="Open menu" onClick={() => setMenuOpen(!menuOpen)}><Menu size={18} /></button>{menuOpen && <div className="menu-popover">{firebaseConfigured ? <button onClick={async () => { if (user) await signOutUser(); else await signInWithGoogle(); setMenuOpen(false) }}>{user ? 'Sign out' : 'Sign in with Google'}</button> : <span>Configure Firebase to enable sync.</span>}</div>}</div></header>
+    <main className="page">
+      <section className="hero"><div><p className="eyebrow">{todayLabel} <span>/</span> Junior year</p><h1>Today, clearly.</h1><p className="hero-copy">A private workspace for the work you choose to keep in view.</p></div><div className="hero-controls"><button className="soft-button" onClick={exportDay}><Copy size={16} /> Copy day</button>{firebaseConfigured && <button className="soft-button dark" onClick={async () => { try { await signInWithGoogle(); setNotice('Signed in.')} catch (signInError) { setError(signInError instanceof Error ? signInError.message : 'Sign-in was not completed.') } }}><LogIn size={16} /> {user ? 'Account' : 'Sign in'}</button>}</div></section>
+      {error && <div className="form-error" role="alert">{error}<button aria-label="Dismiss error" onClick={() => setError('')}><X size={14} /></button></div>}
+      <div className="notice" role="status"><CalendarDays size={15} /><span>{user ? 'Your data is connected to this account.' : 'Sign in to save tasks and subjects across devices.'}<button onClick={() => setNotice('Morning bulletin integration is not configured.')}>Bulletin settings</button></span><RefreshCw size={14} /></div>
+      <section className="brief-strip"><div><p className="eyebrow">Daily brief</p><p>{brief || 'Generate a short summary from the tasks you have added.'}</p></div><button className="soft-button" onClick={generateBrief} disabled={briefBusy}>{briefBusy ? 'Generating' : 'Generate brief'}</button></section>
+      <div className="dashboard-grid"><div className="main-column"><section className="section-heading"><div><p className="eyebrow">Focus lane</p><h2>Tasks for today</h2></div><span className="muted">{completed} of {tasks.length} complete</span></section><section className="module"><div className="module-head"><div><p className="eyebrow">Rapid capture</p><h3>Your task list</h3></div><button className="round-button" aria-label="Add task" onClick={() => setShowAdd(!showAdd)}>{showAdd ? <X size={17} /> : <Plus size={17} />}</button></div>{showAdd && <form className="add-form" onSubmit={addTask}><input autoFocus value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="Add a task" aria-label="Task title" /><button className="soft-button dark">Add</button></form>}<div className="task-list">{tasks.length ? tasks.map((task) => <div className={`task-row ${task.done ? 'is-done' : ''}`} key={task.id}><button className="check-button" onClick={() => updateTask({ ...task, done: !task.done })} aria-label={task.done ? `Mark ${task.title} incomplete` : `Complete ${task.title}`}>{task.done ? <Check size={15} /> : <Circle size={15} />}</button><div className="task-content"><strong>{task.title}</strong><span>{task.duration || 30} minutes</span></div><button className={`priority priority-${(task.priority || 'Medium').toLowerCase()}`} onClick={() => updateTask({ ...task, priority: task.priority === 'High' ? 'Low' : task.priority === 'Low' ? 'Medium' : 'High' })}>{task.priority || 'Medium'} <ChevronDown size={13} /></button><button className="row-icon" aria-label={`Delete ${task.title}`} onClick={() => deleteTask(task)}><Trash2 size={15} /></button></div>) : <p className="empty-state">No tasks yet. Add the next thing you need to do.</p>}</div></section><section className="module"><div className="module-head"><div><p className="eyebrow">Deterministic plan</p><h3>Available afternoon blocks</h3></div></div><div className="schedule-list">{schedule.length ? schedule.map((item) => <div className="schedule-row" key={item.id}><time>{item.start}</time><div className="schedule-bar"><strong>{item.title}</strong><span>{item.duration || 30} minutes / {item.reason}</span></div></div>) : <p className="empty-state">Add an incomplete task to create a plan.</p>}</div></section></div>
+        <aside className="side-column"><section className="module"><div className="module-head"><div><p className="eyebrow">Junior year</p><h3>Subjects and blocks</h3></div></div><p className="module-note">School year starts August 4.</p><div className="subject-list">{allSubjects.map((subject) => <div className="subject-row" key={subject.id}><span className="subject-block">{subject.block}</span><div><strong>{subject.name}</strong><span>{[subject.teacher, subject.term].filter(Boolean).join(' / ')}</span></div></div>)}</div></section><section className="module"><div className="module-head"><div><p className="eyebrow">Deadlines and goals</p><h3>Your horizon</h3></div></div><p className="empty-state">No deadlines added yet. Add only dates that matter to you.</p></section><section className="module"><div className="module-head"><div><p className="eyebrow">Privacy</p><h3>Private by default</h3></div></div><p className="module-note">Your dashboard is intended for your account and is excluded from search indexing. Data access is restricted to your verified account.</p></section></aside></div>
+      <footer><span>daymark / private life dashboard</span><span><a href="/privacy.html">Privacy</a> / <a href="/terms.html">Terms</a> / Rules-based planning works without an AI provider.</span></footer>
+    </main>{notice && <div className="toast" role="status"><Check size={16} />{notice}</div>}
+  </div>
+}
+
+export default App

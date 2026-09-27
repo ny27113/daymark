@@ -1,0 +1,212 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed data model
+// ===============================================================
+// All application data is scoped below users/{uid}. The uid is the
+// authenticated Firebase user, not a client-supplied document field.
+//
+// tasks/{id}: id (string or number, required), title (string 1-240),
+// duration (number 1-1440), priority ('Low'|'Medium'|'High'), done (bool),
+// deadline (string 0-120). Optional createdAt/updatedAt are timestamps.
+// schedule/{id}: id, title, duration, priority, done, deadline plus start
+// (string 0-40) and reason (string 0-240). Optional timestamps as above.
+// deadlines/{id}: title (string 1-240), date (string 1-120), detail
+// (string 0-500), completed (bool). Optional timestamps as above.
+// routines/{id}: title (string 1-240), detail (string 0-500), done (bool),
+// frequency (string 1-40). Optional timestamps as above.
+// subjects/{id}: name (string 1-160), room (string 0-80), teacher
+// (string 0-160), color (string 0-40). Optional timestamps as above.
+// sessions/{sessionId}: server-managed only; uid, sessionId, createdAt,
+// lastSeenAt, revoked and optional revokedAt. Clients may read their own
+// session records but cannot create, update, or delete them.
+//
+// The application currently uses in-memory demo data. These validators are
+// intentionally strict for the documented persistence API and must be
+// updated together with that API if its schema changes.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAllowedEmail() {
+      return signedIn()
+        && request.auth.token.email_verified == true
+        && (
+          request.auth.token.email.matches('.*@nyu[.]edu$')
+          || request.auth.token.email.matches('.*@aischennai[.]org$')
+          || request.auth.token.email.matches('.*@proton[.]me$')
+        );
+    }
+
+    function owns(userId) {
+      return isAllowedEmail() && request.auth.uid == userId;
+    }
+
+    function hasTimestamps(data) {
+      return (!('createdAt' in data) || data.createdAt is timestamp)
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function validId(data) {
+      return data.id is string || data.id is number;
+    }
+
+    function validTask(data) {
+      return data.keys().hasOnly(['id', 'title', 'duration', 'priority', 'done',
+          'deadline', 'createdAt', 'updatedAt'])
+        && data.keys().hasAll(['id', 'title', 'duration', 'priority', 'done',
+          'deadline'])
+        && validId(data)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 240
+        && data.duration is number && data.duration >= 1 && data.duration <= 1440
+        && data.priority in ['Low', 'Medium', 'High']
+        && data.done is bool
+        && data.deadline is string && data.deadline.size() <= 120
+        && hasTimestamps(data);
+    }
+
+    function validSchedule(data) {
+      return data.keys().hasOnly(['id', 'title', 'duration', 'priority', 'done',
+          'deadline', 'start', 'reason', 'createdAt', 'updatedAt'])
+        && data.keys().hasAll(['id', 'title', 'duration', 'priority', 'done',
+          'deadline', 'start', 'reason'])
+        && validId(data)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 240
+        && data.duration is number && data.duration >= 1 && data.duration <= 1440
+        && data.priority in ['Low', 'Medium', 'High']
+        && data.done is bool
+        && data.deadline is string && data.deadline.size() <= 120
+        && data.start is string && data.start.size() <= 40
+        && data.reason is string && data.reason.size() <= 240
+        && hasTimestamps(data);
+    }
+
+    function validDeadline(data) {
+      return data.keys().hasOnly(['title', 'date', 'detail', 'completed',
+          'createdAt', 'updatedAt'])
+        && data.keys().hasAll(['title', 'date', 'detail', 'completed'])
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 240
+        && data.date is string && data.date.size() >= 1 && data.date.size() <= 120
+        && data.detail is string && data.detail.size() <= 500
+        && data.completed is bool
+        && hasTimestamps(data);
+    }
+
+    function validRoutine(data) {
+      return data.keys().hasOnly(['title', 'detail', 'done', 'frequency',
+          'createdAt', 'updatedAt'])
+        && data.keys().hasAll(['title', 'detail', 'done', 'frequency'])
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 240
+        && data.detail is string && data.detail.size() <= 500
+        && data.done is bool
+        && data.frequency is string && data.frequency.size() >= 1
+          && data.frequency.size() <= 40
+        && hasTimestamps(data);
+    }
+
+    function validSubject(data) {
+      return data.keys().hasOnly(['name', 'room', 'teacher', 'color',
+          'createdAt', 'updatedAt'])
+        && data.keys().hasAll(['name', 'room', 'teacher', 'color'])
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 160
+        && data.room is string && data.room.size() <= 80
+        && data.teacher is string && data.teacher.size() <= 160
+        && data.color is string && data.color.size() <= 40
+        && hasTimestamps(data);
+    }
+
+    function validSession(data, sessionId) {
+      return data.keys().hasOnly(['uid', 'sessionId', 'createdAt', 'lastSeenAt',
+          'revoked', 'revokedAt'])
+        && data.keys().hasAll(['uid', 'sessionId', 'createdAt', 'lastSeenAt',
+          'revoked'])
+        && data.uid is string && data.uid == request.auth.uid
+        && data.sessionId is string && data.sessionId == sessionId
+        && data.createdAt is timestamp && data.lastSeenAt is timestamp
+        && data.revoked is bool
+        && (!('revokedAt' in data) || data.revokedAt is timestamp);
+    }
+
+    function immutableCreatedAt() {
+      return !('createdAt' in resource.data)
+        || (('createdAt' in request.resource.data)
+          && request.resource.data.createdAt == resource.data.createdAt);
+    }
+
+    match /users/{userId} {
+      allow read: if owns(userId);
+      allow create: if owns(userId)
+        && request.resource.data.keys().hasOnly(['displayName', 'email', 'photoURL',
+          'createdAt', 'updatedAt'])
+        && request.resource.data.keys().hasAll(['displayName', 'email', 'createdAt'])
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() <= 120
+        && request.resource.data.email is string
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.email.size() <= 320
+        && request.resource.data.createdAt is timestamp
+        && (!('updatedAt' in request.resource.data)
+          || request.resource.data.updatedAt is timestamp)
+        && (!('photoURL' in request.resource.data)
+          || (request.resource.data.photoURL is string
+            && request.resource.data.photoURL.size() <= 2048));
+      allow update: if owns(userId)
+        && request.resource.data.keys().hasOnly(['displayName', 'email', 'photoURL',
+          'createdAt', 'updatedAt'])
+        && request.resource.data.keys().hasAll(['displayName', 'email', 'createdAt'])
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() <= 120
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.createdAt == resource.data.createdAt
+        && (!('updatedAt' in request.resource.data)
+          || request.resource.data.updatedAt is timestamp)
+        && (!('photoURL' in request.resource.data)
+          || (request.resource.data.photoURL is string
+            && request.resource.data.photoURL.size() <= 2048));
+      allow delete: if false;
+
+      match /tasks/{taskId} {
+        allow read: if owns(userId);
+        allow create: if owns(userId) && validTask(request.resource.data);
+        allow update: if owns(userId) && validTask(request.resource.data)
+          && immutableCreatedAt();
+        allow delete: if owns(userId);
+      }
+      match /schedule/{blockId} {
+        allow read: if owns(userId);
+        allow create: if owns(userId) && validSchedule(request.resource.data);
+        allow update: if owns(userId) && validSchedule(request.resource.data)
+          && immutableCreatedAt();
+        allow delete: if owns(userId);
+      }
+      match /deadlines/{deadlineId} {
+        allow read: if owns(userId);
+        allow create: if owns(userId) && validDeadline(request.resource.data);
+        allow update: if owns(userId) && validDeadline(request.resource.data)
+          && immutableCreatedAt();
+        allow delete: if owns(userId);
+      }
+      match /routines/{routineId} {
+        allow read: if owns(userId);
+        allow create: if owns(userId) && validRoutine(request.resource.data);
+        allow update: if owns(userId) && validRoutine(request.resource.data)
+          && immutableCreatedAt();
+        allow delete: if owns(userId);
+      }
+      match /subjects/{subjectId} {
+        allow read: if owns(userId);
+        allow create: if owns(userId) && validSubject(request.resource.data);
+        allow update: if owns(userId) && validSubject(request.resource.data)
+          && immutableCreatedAt();
+        allow delete: if owns(userId);
+      }
+      match /sessions/{sessionId} {
+        allow read: if owns(userId);
+        allow create, update, delete: if false;
+      }
+    }
+  }
+}
