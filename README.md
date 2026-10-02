@@ -30,7 +30,7 @@ included `.coderabbit.yaml` configures security-focused review paths. The
 `coderabbitai/cursor-plugin` reference is a Cursor plugin and must not be
 bundled into the website.
 
-Vite proxies `/api/*` to that server during development. `POST /api/brief` accepts the current tasks and generated schedule and uses Gemini when `GEMINI_API_KEY` is configured, otherwise it uses the deterministic fallback. `POST /api/chat` provides the protected private assistant. If you deploy the API separately, set `VITE_API_BASE_URL` in the frontend build; leave it empty for local Vite proxying. Configure `GEMINI_API_KEY` and `GEMINI_MODEL` in the server environment only. These values are never bundled into the frontend. `.env.local` and all other local env files are ignored by Git.
+Vite proxies `/api/*` to that server during development. `POST /api/brief` accepts the current tasks and generated schedule and uses Gemini when `GEMINI_API_KEY` is configured, otherwise it uses the deterministic fallback. `POST /api/chat` provides the protected private assistant. If you deploy the API separately, set `VITE_API_BASE_URL` in the frontend build; leave it empty for local Vite proxying. Configure `GEMINI_API_KEY` and `GEMINI_MODEL` in the server environment only. The default model is `gemini-3.8-flash`; use a currently supported Gemini Developer API model and do not put an OpenRouter key in this variable. These values are never bundled into the frontend. `.env.local` and all other local env files are ignored by Git.
 
 ## Firebase setup
 

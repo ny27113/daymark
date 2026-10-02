@@ -3,7 +3,7 @@ import crypto from 'node:crypto'
 
 const port = Number(process.env.PORT || 8787)
 const geminiApiKey = process.env.GEMINI_API_KEY
-const geminiModel = process.env.GEMINI_MODEL || 'gemini-2.5-flash'
+const geminiModel = process.env.GEMINI_MODEL || 'gemini-3.8-flash'
 const allowedOrigin = process.env.ALLOWED_ORIGIN
 const firebaseProjectId = process.env.FIREBASE_PROJECT_ID
 const localDevAuth = process.env.LOCAL_DEV_AUTH === 'true'
@@ -149,7 +149,11 @@ async function generateGeminiText(prompt) {
       generationConfig: { temperature: 0.3, maxOutputTokens: 500 },
     }),
   })
-  if (!upstream.ok) throw new Error(`Gemini returned ${upstream.status}.`)
+  if (!upstream.ok) {
+    const providerError = await upstream.text()
+    console.error(`Gemini request failed (${upstream.status}) for model ${geminiModel}:`, providerError.slice(0, 500))
+    throw new Error(`Gemini rejected the request (${upstream.status}). Check GEMINI_MODEL and that GEMINI_API_KEY is a Google AI Studio key.`)
+  }
   const data = await upstream.json()
   const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('') || ''
   if (!text.trim()) throw new Error('Gemini returned no text.')
