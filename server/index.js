@@ -141,23 +141,29 @@ function geminiUrl() {
 
 async function generateGeminiText(prompt) {
   if (!geminiApiKey) return null
-  const upstream = await fetch(geminiUrl(), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.3, maxOutputTokens: 500 },
-    }),
-  })
-  if (!upstream.ok) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const upstream = await fetch(geminiUrl(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.3, maxOutputTokens: 500 },
+      }),
+    })
+    if (upstream.ok) {
+      const data = await upstream.json()
+      const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('') || ''
+      if (!text.trim()) throw new Error('Gemini returned no text.')
+      return text.trim()
+    }
     const providerError = await upstream.text()
     console.error(`Gemini request failed (${upstream.status}) for model ${geminiModel}:`, providerError.slice(0, 500))
-    throw new Error(`Gemini rejected the request (${upstream.status}). Check GEMINI_MODEL and that GEMINI_API_KEY is a Google AI Studio key.`)
+    if (![429, 500, 502, 503, 504].includes(upstream.status) || attempt === 1) {
+      throw new Error(`Gemini rejected the request (${upstream.status}). Check GEMINI_MODEL and that GEMINI_API_KEY is a Google AI Studio key.`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400))
   }
-  const data = await upstream.json()
-  const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('') || ''
-  if (!text.trim()) throw new Error('Gemini returned no text.')
-  return text.trim()
+  return null
 }
 
 async function readBody(request) {
@@ -170,7 +176,18 @@ async function readBody(request) {
 }
 
 async function createBrief(payload) {
-  const text = await generateGeminiText(`Write a concise, supportive daily student brief in two sentences. Do not invent deadlines or facts. Return plain text only.\n${JSON.stringify({ tasks: payload.tasks, schedule: payload.schedule })}`)
+  const compactTasks = payload.tasks.slice(0, 50).map((task) => ({
+    title: cleanText(task.title, 180),
+    priority: task.priority,
+    duration: Number(task.duration) || 30,
+    done: Boolean(task.done),
+  }))
+  const compactSchedule = payload.schedule.slice(0, 50).map((item) => ({
+    title: cleanText(item.title, 180),
+    start: cleanText(item.start, 40),
+    duration: Number(item.duration) || 30,
+  }))
+  const text = await generateGeminiText(`Write a concise, supportive daily student brief in two sentences. Do not invent deadlines or facts. Return plain text only.\n${JSON.stringify({ tasks: compactTasks, schedule: compactSchedule })}`)
   return text ? { text, source: 'gemini' } : fallbackBrief(payload.tasks, payload.schedule)
 }
 
@@ -256,6 +273,7 @@ const server = http.createServer(async (request, response) => {
     if (!hasValidAccessToken(request)) return json(response, 401, { error: 'The access screen must be completed first.' }, requestOrigin)
     const user = await authenticate(request)
     if (!user) return json(response, 401, { error: 'Sign in is required.' }, requestOrigin)
+    if (!(await hasActiveSession(request, user))) return json(response, 401, { error: 'An active device session is required.' }, requestOrigin)
     const payload = await readBody(request)
     if (!Array.isArray(payload.tasks) || !Array.isArray(payload.schedule) || payload.tasks.length > 100 || payload.schedule.length > 100) {
       return json(response, 400, { error: 'tasks and schedule arrays are required and limited to 100 items.' }, requestOrigin)
